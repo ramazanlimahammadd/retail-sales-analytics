@@ -1,0 +1,616 @@
+---
+title: "Yekun Layihə"
+author: "Mahammad Ramazanli"
+date: "2026-09-01"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    css: style.css 
+    theme: flatly
+    df_print: paged
+    encoding: UTF-8
+
+---
+
+
+```{r setup,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(readr)
+library(readxl)
+library(lubridate)
+library(xlsx)
+library(plotly)
+library(kableExtra)
+library(DT)
+library(RMariaDB)
+library(DBI)
+library(stringr)
+library(scales)
+library(tidyr)
+
+
+data_receipts = readRDS("fp_receipts.rds")
+data_map = readRDS("fp_map (1).rds")
+joined_data = readRDS("qara.rds")
+
+joined_data = joined_data %>% mutate(profit_margin_perc = paste0(comma(profit_margin * 100), " %"),
+                        margin_cat = case_when(
+  profit_margin < -2  ~ "1. x<-200",
+  profit_margin >= -2 & profit_margin < -1~ "2. -200<=x<-100",
+  profit_margin >= -1 & profit_margin < 0 ~ "3. -100<=x<0",
+  profit_margin >= 0 & profit_margin < 1 ~ "4. 0<=x<100",
+  profit_margin >= 1 & profit_margin < 2 ~ "5. 100<=x<200",
+  profit_margin >= 2  ~ "6. x>=200"
+))
+
+summary(data_map)
+summary(data_receipts)
+
+```
+
+## Mündəricat
+
+> Cari Hesabat aşağıdakı hissələrdən ibarətdir:
+
+- Deskriptiv Təhlil
+- Anomaliyalar
+- Proqnoz və Fərziyyələr
+- Xülasə
+
+
+## Deskriptiv Təhlil
+
+Məlumat Mənbələri
+
+Analiz iki əsas dataset əsasında aparılmışdır:
+
+`fp_receipts`  
+Tranzaksiya səviyyəsində satış məlumatlarını ehtiva edir (~10 milyon müşahidə).  
+Hər sətir ayrıca satış əməliyyatını göstərir və aşağıdakı əsas dəyişənləri əhatə edir:
+- satış nöqtəsi (pos)
+- tarix (rec_date)
+- çek ID (rec_id)
+- məhsul adı (product_name)
+- miqdar (qnt)
+- vahid qiymət (unit_price)
+
+Bu dataset əməliyyat detalları üzrə əsas mənbə rolunu oynayır.
+
+`fp_map`  
+Məhsul və zaman periodu üzrə əlavə atributları ehtiva edir (~118 min müşahidə).  
+Əsas dəyişənlər:
+- period
+- product_type
+- product
+- profit_margin
+
+Bu dataset satış məlumatlarına kontekst (məhsul tipi və mənfəət marjası) əlavə etmək məqsədi daşıyır.
+
+---
+
+Join Əməliyyatı
+
+Analitik mərhələdə `fp_receipts` dataset-i `fp_map` ilə məhsul və period əsasında birləşdirilmişdir.
+
+Join əməliyyatının məqsədi:
+- Tranzaksiya məlumatına məhsul tipi əlavə etmək  
+- Hər satış üçün müvafiq mənfəət marjasını inteqrasiya etmək  
+
+Join nəticələri:
+
+- İlkin müşahidə sayı (fp_receipts): 10,000,909  
+- Join sonrası müşahidə sayı (joined_data): 9,812,609  
+
+Təxminən 188 min müşahidə uyğun açar tapmadığı üçün yekun datasetə daxil olmamışdır.  
+Bu, bəzi məhsul–period kombinasiyalarının xəritə datasında mövcud olmadığını göstərir.
+
+Analizin əsas hissəsi aşağıda təqdim edilən **joined_data** dataset-i üzərindən aparılmışdır.
+
+---
+
+**joined_data Datasetinin Ümumi Xüsusiyyətləri**
+
+`joined_data` tranzaksiya səviyyəsində genişləndirilmiş satış məlumatıdır və aşağıdakı komponentləri birləşdirir:
+
+- Satış əməliyyatı məlumatı  
+- Məhsul kateqoriyası  
+- Zaman göstəricisi  
+- Mənfəət marjası  
+
+Dataset təxminən 9.8 milyon müşahidədən ibarətdir və struktur olaraq aşağıdakı tip dəyişənləri ehtiva edir:
+
+- Kateqorial dəyişənlər (pos, product_name, product_type və s.)
+- Zaman dəyişəni (rec_date)
+- Kəmiyyət dəyişənləri (qnt, unit_price, Total)
+- Mənfəət göstəriciləri (profit_margin və onun törəmələri)
+
+Bu mərhələdə datasetin statistik xülasəsi aşağıda təqdim olunur:
+
+
+```{r}
+summary(joined_data)
+```
+
+
+Nəticələrin Şərhi
+
+`joined_data` dataset-i 9,812,609 tranzaksiya müşahidəsindən ibarətdir və 19.04.2024–31.05.2024 tarix aralığını əhatə edir. Bu, qısa müddətli və yüksək həcmli əməliyyat datasıdır.
+
+**Satış miqdarı (qnt):**  
+Median 2, orta 3.41-dir. Maksimum 300,000 olması paylanmanın sağa meyilli olduğunu göstərir. Böyük miqdar dəyərləri mövcuddur və orta göstəriciyə təsir edir.
+
+**Vahid qiymət (unit_price):**  
+Median 2.79, orta 5.69-dur. Maksimum 132,300-dür. Orta ilə median arasındakı fərq yüksək qiymətli az sayda əməliyyatın mövcudluğunu göstərir.
+
+**Ümumi məbləğ (Total):**  
+Median 6.18, orta 13.21-dir. Maksimum 303,000-dür. Satışların böyük hissəsi aşağı məbləğlidir, lakin yüksək məbləğli kənar dəyərlər mövcuddur.
+
+**Həftə günü üzrə paylanma:**  
+Cümə günü (3,363,218 müşahidə) digər günlərə nisbətən əhəmiyyətli dərəcədə yüksəkdir. Bu, həftəlik satış strukturunun qeyri-bərabər paylandığını göstərir.
+
+**Mənfəət marjası (profit_margin):**  
+Median və orta 0.2-dir. Minimum -2.6, maksimum 1.1-dir. Lakin 9,372,219 müşahidə NA-dır. Bu, margin dəyişəni üzrə məlumatın böyük hissəsinin uyğunlaşmadığını göstərir və bu sahədə analiz məhduddur.
+
+Ümumilikdə dataset tranzaksiya səviyyəsindədir, əsas kəmiyyət dəyişənlərində sağa meyilli paylanma müşahidə olunur və kənar dəyərlər mövcuddur. Margin dəyişəni üzrə yüksək NA səviyyəsi struktur məhdudiyyət yaradır.
+
+
+
+
+> POS üzrə satış (Top 20)
+
+```{r T1,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+sales_by_pos <- joined_data %>%
+  group_by(pos) %>%
+  summarise(total_sales = sum(Total, na.rm = TRUE), .groups="drop") %>%
+  arrange(desc(total_sales)) %>%
+  slice_head(n = 20)
+
+p_raw <- plot_ly(
+  data = sales_by_pos,
+  x = ~total_sales,
+  y = ~reorder(pos, total_sales),
+  type = "bar",
+  orientation = "h",
+  marker = list(
+    color = ~total_sales,
+    colorscale = "Blues",
+    line = list(width = 0)
+  ),
+  text = ~format(round(total_sales, 0), big.mark = ","),
+  textposition = "outside",
+  hovertemplate = paste(
+    "<b>%{y}</b><br>",
+    "Total sales: %{x:,}<br>",
+    "<extra></extra>"
+  )
+) %>%
+  layout(
+    title = list(text = "POS – Total Sales", x = 0.05),
+    xaxis = list(title = "Total Sales", showgrid = FALSE, zeroline = FALSE),
+    yaxis = list(title = "", showgrid = FALSE),
+    font = list(size = 12),
+    margin = list(l = 160, r = 40, t = 60, b = 40),
+    plot_bgcolor = "white",
+    paper_bgcolor = "white"
+  )
+
+p_raw
+
+```
+
+> Həftə günü üzrə satış trendi
+
+```{r T2,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+sales_by_day <- joined_data %>%
+  group_by(hefte_gunu) %>%
+  summarise(total_sales = sum(Total, na.rm = TRUE), .groups="drop") %>%
+  arrange(hefte_gunu)
+
+fig1 <- plot_ly(
+  data = sales_by_day,
+  x = ~hefte_gunu,
+  y = ~total_sales,
+  type = 'scatter',
+  mode = 'lines+markers',
+  fill = 'tozeroy',
+  line = list(color = '#2980b9', width = 3),
+  marker = list(size = 10, color = '#1a5276', symbol = 'circle'),
+  fillcolor = 'rgba(41, 128, 185, 0.3)'
+) %>%
+  layout(
+    title = list(text = "<b>Satış Trendi</b>", x = 0.5),
+    xaxis = list(title = "Həftənin Günləri", showgrid = FALSE),
+    yaxis = list(title = "Satış Məbləği", gridcolor = 'rgba(0,0,0,0.1)'),
+    hovermode = "x unified",
+    paper_bgcolor = 'white',
+    plot_bgcolor = 'white'
+  )
+
+fig1
+
+```
+
+> Top 10 məhsul (satış həcmi)
+
+```{r T3,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+top_products <- joined_data %>%
+  group_by(product_name) %>%
+  summarise(total_sales = sum(Total, na.rm = TRUE), .groups="drop") %>%
+  arrange(desc(total_sales))
+
+top_10_orig <- top_products %>% head(10)
+
+fig3 <- plot_ly(
+  data = top_10_orig,
+  x = ~total_sales,
+  y = ~reorder(product_name, total_sales),
+  type = 'bar',
+  orientation = 'h',
+  marker = list(
+    color = 'rgba(51, 122, 183, 0.8)',
+    line = list(color = 'rgba(51, 122, 183, 1.0)', width = 1)
+  )
+) %>%
+  layout(
+    title = list(text = "<b>Top 10 Məhsul (Satış Həcmi)</b>", x = 0.5),
+    xaxis = list(title = "Ümumi Satış"),
+    yaxis = list(title = ""),
+    margin = list(l = 150)
+  )
+
+fig3
+
+```
+
+> Deskriptiv mini-cədvəl (Top POS və Top məhsul)
+
+```{r T4,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+top_pos_tbl <- sales_by_pos %>% slice_head(n = 10)
+top_prod_tbl <- top_products %>% slice_head(n = 10)
+
+kable(top_pos_tbl, col.names = c("POS", "Total Sales"), digits = 0)
+kable(top_prod_tbl, col.names = c("Product", "Total Sales"), digits = 0)
+```
+
+
+## Anomaliyalar
+
+> Məhsul növü üzrə satış həcmi (NA dəyərlərin analizi)
+
+
+```{r T5,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+joined_data2 <- joined_data %>%
+  mutate(
+    na_flag = is.na(product_type),
+    product_type = ifelse(is.na(product_type), "NA", product_type)
+  )
+
+sales_by_type <- joined_data2 %>%
+  group_by(product_type, na_flag) %>%
+  summarise(
+    total_sales = sum(Total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+fig <- plot_ly(
+  data = sales_by_type,
+  x = ~product_type,
+  y = ~total_sales,
+  color = ~na_flag,
+  colors = c("blue", "red"), # FALSE üçün mavi, TRUE üçün qırmızı
+  type = 'bar',
+  text = ~paste(format(total_sales, big.mark = ",")),
+  hoverinfo = 'text'
+) %>%
+  layout(
+    title = list(text = "Məhsul Növü üzrə Satış Həcmi", y = 0.95),
+    xaxis = list(title = "Məhsul Növü"),
+    yaxis = list(title = "Ümumi Satış", tickformat = ","),
+    legend = list(title = list(text = '<b>NA Dəyərləri</b>')),
+    barmode = 'group',
+    margin = list(t = 50)
+  )
+
+fig
+
+```
+
+> Məhsul növü üzrə müşahidə sayı
+
+```{r T6,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+product_type_count <- joined_data %>%
+  count(product_type, name = "Count")
+
+product_type_count
+
+```
+
+> Məhsul növü üzrə ümumi satış və unikal məhsul sayı
+
+```{r T7,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+summary_tbl <- joined_data %>%
+  mutate(product_type = ifelse(is.na(product_type), "NA", product_type)) %>%
+  group_by(product_type) %>%
+  summarise(
+    total_sales = sum(Total, na.rm = TRUE),
+    unique_products = n_distinct(product_name),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(total_sales, unique_products),
+    names_to = "metric",
+    values_to = "value"
+  )
+
+summary_tbl
+
+```
+
+> Marja analizi
+
+```{r T8,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+
+tab1 <- joined_data %>% 
+  filter(!is.na(margin_cat)) %>% 
+  count(margin_cat, name = "count") %>% 
+  mutate( percent = count / sum(count), 
+          label = paste0(comma(count), "\n(", scales::percent(percent), ")") )
+
+
+ggplot(tab1, aes(x = margin_cat, y = count)) +
+  geom_bar(stat = "identity", fill = "#1F4E79") +
+  geom_text(aes(label = label), vjust = -0.5, color = "#1F4E79", size = 5) +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.25))) +
+  labs(
+  title = "Mənfəət Marjasının Paylanması",
+  subtitle = "Məhsulların mənfəət marjası kateqoriyaları üzrə bölgüsü",
+  x = "Mənfəət Marjası Kateqoriyası",
+  y = "Məhsul sayı"
+) +
+  theme_minimal(base_family = "sans") +
+  theme(
+    plot.background = element_rect(fill = "#F2F4F7", color = NA),
+    panel.background = element_rect(fill = "#FFFFFF", color = NA),
+    panel.grid = element_line(color = "#E0E0E0"),
+    axis.text.x = element_text(color = "#333333", size = 10, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    plot.title = element_text(color = "#1F4E79", size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(color = "#333333", size = 12, hjust = 0.5),
+    axis.title = element_text(color = "#333333"),
+    legend.position = "none"
+  )
+
+
+
+```
+
+
+
+> Zamana görə gəlir analizi (Aprel–May müqayisəsi)
+
+```{r T9,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+df_ts <- joined_data %>%
+  mutate(
+    rec_date = as.Date(rec_date),
+    ay = factor(
+      format(rec_date, "%m"),
+      levels = c("04", "05"),
+      labels = c("Aprel", "May")
+    ),
+    gun = day(rec_date)
+  )
+
+daily_revenue <- df_ts %>%
+  group_by(ay, gun) %>%
+  summarise(
+    gelir = sum(Total, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+create_plot <- function(data_subset, month_name, show_yaxis = TRUE) {
+  
+  # Şərt qoyuruq: Əgər ay Maydırsa 6 gün, deyilsə (Apreldirsə) 3 gün aralıq qoy
+  step_size <- if(month_name == "May") 6 else 3
+  
+  breaks <- seq(min(data_subset$gun), max(data_subset$gun), by = step_size)
+  
+  plot_ly(
+    data = data_subset,
+    x = ~gun,
+    y = ~gelir,
+    type = 'scatter',
+    mode = 'lines+markers',
+    fill = 'tozeroy', 
+    fillcolor = 'rgba(11, 60, 93, 0.1)',
+    line = list(color = '#0B3C5D', width = 3, shape = "spline"), 
+    marker = list(color = '#0B3C5D', size = 7, 
+                  line = list(color = 'white', width = 1)),
+    name = month_name,
+    hovertemplate = paste0("<b>", month_name, "</b><br>Gün: %{x}<br>Gəlir: %{y:,.0f} AZN<extra></extra>")
+  ) %>%
+    layout(
+      xaxis = list(
+        title = "", # Fərdi başlıqları bağlayırıq
+        tickmode = "array",
+        tickvals = breaks,
+        # "Apr 20", "May 10" formatı burada təmin olunur
+        ticktext = paste(substr(month_name, 1, 3), breaks),
+        gridcolor = 'rgba(235, 235, 235, 1)',
+        showline = TRUE,
+        linecolor = '#333',
+        tickangle = 0,
+        fixedrange = TRUE
+      ),
+      yaxis = list(
+        title = if(show_yaxis) "Ümumi Gəlir" else "",
+        gridcolor = 'rgba(235, 235, 235, 1)',
+        tickformat = ",.0f", 
+        showline = show_yaxis,
+        linecolor = '#333'
+      )
+    )
+}
+
+# Qrafikləri yenidən yaradırıq
+p_aprel <- daily_revenue %>% filter(ay == "Aprel") %>% create_plot("Aprel", TRUE)
+p_may <- daily_revenue %>% filter(ay == "May") %>% create_plot("May", FALSE)
+
+# Subplot hissəsi
+fig <- subplot(p_aprel, p_may, shareY = TRUE, margin = 0.05) %>%
+  layout(
+    title = list(text = "<b>GÜNLÜK GƏLİR TRENDİ</b>", x = 0.05, y = 0.95),
+    # Bütün yazıları bura cəmləyirik ki, yerləri tərpənməsin
+    annotations = list(
+      list(x = 0.22, y = 1.05, text = "<b>APREL</b>", showarrow = F, xref='paper', yref='paper', font=list(size=14)),
+      list(x = 0.78, y = 1.05, text = "<b>MAY</b>", showarrow = F, xref='paper', yref='paper', font=list(size=14)),
+      # "Tarix" yazısını tam mərkəzə və aşağıya bərkidirik
+      list(x = 0.5, y = -0.2, text = "<b>Tarix</b>", showarrow = F, xref='paper', yref='paper', font=list(size=13))
+    ),
+    showlegend = FALSE,
+    margin = list(t = 100, b = 100, l = 80, r = 40), # Yazıların sığması üçün boşluğu artırdıq
+    plot_bgcolor = 'white',
+    paper_bgcolor = 'white'
+  )
+
+fig
+```
+
+
+## Proqnoz və Fərziyyələr
+
+> Xətti Reqressiya Modeli
+
+```{r T10,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+
+model <- lm(Total ~ profit_margin + hefte_gunu, data = joined_data)
+
+summary(model)
+
+
+par(mfrow = c(2, 2)) 
+plot(model)
+```
+
+ **Şərh: **
+
+1. **Intercept (Baza Dəyəri)**:  
+   - **9.07446**: Bu, **hefte_gunu** və **profit_margin** sıfır olduğu zaman satışların ortalama dəyərinin **9.07 AZN** olacağını göstərir.
+
+2. **Profit Margin**:  
+   - **p-value < 2e-16**: Bu çox əhəmiyyətlidir.  
+   - **Interpretasiya**: **Profit margin** artdıqca, satışlar **azalır**. Hər 1 AZN-lik marja artışı, **satışları 3.87 AZN azaldır**.
+
+3. **Həftə Günləri**:  
+   - **hefte_gunu.L (1-ci gün)**: **p-value = 0.82840**. Bu, **hefte_gunu.L**-in satışlara təsir etmədiyini göstərir.  
+   - **hefte_gunu.Q (2-ci gün)**: **p-value = 0.01592**, **hefte_gunu.Q**-nun satışlara təsiri statistik olaraq **əhəmiyyətlidir**.  
+   - **hefte_gunu.A4 (Cümə axşamı)**: **p-value = 0.00021**, **Cümə axşamı** günü satışlar **əhəmiyyətli dərəcədə azalır**.  
+   - **hefte_gunu.A5 (Cümə)**: **p-value = 0.00269**, **Cümə** günü satışların **azalması** müşahidə olunur.
+
+---
+
+ **Modelin Performansı (R² və F-statistic):**
+
+- **Multiple R-squared**: **0.001202**  
+  - Modelin **satışları izah etməkdə** zəif olduğunu göstərir. Yəni, **model yalnız 0.12%** satışlardakı dəyişkənliyi izah edir.
+  
+- **Adjusted R-squared**: **0.001186**
+
+- **F-statistic**: **75.69** və **p-value = 2.2e-16**  
+  - Model ümumilikdə **significant** olsa da, **modelin keyfiyyəti** çox aşağıdır.
+
+---
+
+ **Yekun Nəticə:**
+- **Profit margin** ilə **satışlar** arasında **mənfi əlaqə** var: Marja artdıqca satışlar azalır.
+- **Cümə axşamı** və **Cümə** günləri ilə satışların **azalması** müşahidə olunur.
+- **Modelin gücü çox zəifdir** (R² = 0.001)
+
+> Satış Məbləği və Mənfəət Marjası Arasındakı Əlaqə
+
+```{r T11,include=TRUE,echo=TRUE,warning=FALSE,message=FALSE,error=FALSE}
+df2 <- joined_data[!is.na(joined_data$profit_margin), ]
+
+q99_total <- quantile(df2$Total, 0.99)
+df2 <- df2[df2$Total <= q99_total, ]
+
+df2$log_total <- log(df2$Total)
+
+model <- lm(profit_margin ~ log_total, data = df2)
+summary(model)
+
+par(mfrow = c(2, 2)) 
+plot(model)
+
+
+```
+
+
+Satış məbləğinin (Total) mənfəət marjasına təsirini yoxlamaq üçün model qurulmuşdur:
+
+
+> Nəticələr
+
+- **log_total koeffisienti:** -0.0315  
+- **p-value:** < 0.001  
+- **R²:** 0.018  
+
+> Statistik Şərh
+
+- Koeffisient mənfidir və statistik olaraq əhəmiyyətlidir.  
+- Bu o deməkdir ki, satış məbləği artdıqca mənfəət marjası azalır.  
+- Total təxminən 2.7 dəfə (e dəfə) artdıqda, marja orta hesabla 0.031 vahid azalır.  
+
+> Modelin İzah Gücü
+
+- R² = 0.018 → satış məbləği marjanın yalnız 1.8%-ni izah edir.  
+- Əlaqə statistik olaraq güclüdür, lakin izah gücü zəifdir.  
+- Marjanın dəyişməsi əsasən digər faktorlarla bağlıdır.
+
+> Praktik Yekun
+
+- Yüksək satış məbləğləri daha aşağı marja ilə müşayiət olunur.  
+- Bu, endirim strategiyası və ya həcm əsaslı satış modeli ilə əlaqəli ola bilər.  
+- Nəticələr yalnız `profit_margin` dəyəri mövcud olan alt-nümunəyə aiddir.
+
+
+## Xülasə
+
+Bu layihədə satış məlumatları təmizlənmiş, birləşdirilmiş və əsas analiz `joined_data` üzərindən aparılmışdır. İlkin mərhələdə datasetlər uyğun açarlar üzrə join edilərək vahid struktur yaradılmış və analiz üçün istifadə olunmuşdur. Bu mərhələ vacib idi, çünki bütün əsas dəyişənlər (satış məbləği, qiymət, həcm, marja və s.) yalnız birləşdirilmiş datasetdə birlikdə analiz edilə bilərdi.
+
+Təsviri analiz göstərdi ki:
+
+- Satışların böyük hissəsi müəyyən günlərdə cəmlənir (xüsusilə həftənin sonuna yaxın).
+- `Total` və `unit_price` dəyişənlərində yüksək maksimum dəyərlər mövcuddur, bu da outlier ehtimalını göstərir.
+- `profit_margin` dəyişəni üzrə çox sayda NA mövcuddur və analiz yalnız mövcud müşahidələr üzərində aparılmışdır.
+
+Zaman üzrə analiz satışların sabit paylanmadığını göstərdi. Günlər və dövrlər üzrə dəyişkənlik mövcuddur və bəzi pik nöqtələr müşahidə edilir.
+
+Satış məbləği ilə mənfəət marjası arasındakı əlaqə ayrıca model ilə yoxlanıldı. Nəticəyə əsasən:
+
+- Satışın log dəyəri ilə marja arasında mənfi və statistik olaraq əhəmiyyətli əlaqə var.
+- Lakin modelin izah gücü aşağıdır (R² ≈ 0.018).
+- Bu o deməkdir ki, satış həcmi marjanı zəif səviyyədə izah edir və əsas təsir digər faktorlarla bağlıdır.
+
+Ümumi nəticə olaraq:
+
+- Satış davranışı zaman və struktur faktorlarından asılıdır.
+- Böyük həcmli satışlar avtomatik olaraq yüksək marja yaratmır.
+- Mənfəətlilik analizi üçün əlavə dəyişənlərin daxil edilməsi daha məqsədəuyğundur.
+
+Layihə çərçivəsində aparılan analizlər göstərir ki, qərarvermə zamanı yalnız ümumi satış göstəricilərinə deyil, marja və struktur faktorlarına da diqqət yetirilməlidir.
+
+
+
+
+
+
